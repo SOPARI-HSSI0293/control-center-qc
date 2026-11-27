@@ -39,7 +39,7 @@ const API_URL = 'https://script.google.com/macros/s/AKfycbwqhBnwo4-FJmah_myNEgr8
 const APP_NAME = 'Control Center QC';
 const TABS = [['CPAR', 'CPAR'], ['CLAIM/COMPLAINT', 'Claim / Complaint'], ['NG PROSES/DELIVERY', 'NG Proses / Delivery'], ['PROJECT', 'Project']];
 const GUEST_TABS = ['CPAR', 'ISSUE'];
-const RTAB = 'ROUTINE', ITAB = 'ISSUE', ALLTABS = [...TABS, [RTAB, 'Routine Job'], [ITAB, 'Quality Issue']];
+const RTAB = 'ROUTINE', JTAB = 'JOBS', ITAB = 'ISSUE', STALE_DAYS = 3, ALLTABS = [...TABS, [RTAB, 'Routine Job'], [JTAB, 'Kontrol Job'], [ITAB, 'Quality Issue']];
 const MON = ['Jan','Feb','Mar','Apr','Mei','Jun','Jul','Agu','Sep','Okt','Nov','Des'];
 const PAL = [['#e8f0fb','#b3cdee'],['#e1f3f1','#a5d6d0'],['#fdf4df','#ecd08a'],['#f0ebf8','#cbbbe6'],['#d8eedf','#8ccaa0']];
 const CC = {green: 'bg-emerald-100 text-emerald-800', red: 'bg-red-100 text-red-800', amber: 'bg-amber-100 text-amber-800'};
@@ -58,7 +58,7 @@ const idx = r => steps(r).findIndex(s => s.k === r.status_progress);
 const closed = r => idx(r) === steps(r).length - 1;
 const lbl = r => (steps(r)[idx(r)] || {}).l || r.status_progress;
 const canMove = r => U.role !== 'Guest' && (isA() || U.role === 'QC' || U.nama === r.pic);
-function toast(m) { const t = $('#toast'); t.textContent = m; t.classList.remove('hidden'); setTimeout(() => t.classList.add('hidden'), 3000); }
+function toast(m, ms = 3000) { const t = $('#toast'); t.textContent = m; t.classList.remove('hidden'); clearTimeout(toast.t); toast.t = setTimeout(() => t.classList.add('hidden'), ms); }
 function openM(h) { $('#mbox').innerHTML = h; $('#modal').classList.remove('hidden'); }
 function closeM() { $('#modal').classList.add('hidden'); }
 
@@ -106,7 +106,7 @@ function render() {
   m ? detail(decodeURIComponent(m[1])) : dash();
 }
 window.addEventListener('hashchange', () => { if (U && D) { closeM(); render(); window.scrollTo(0, 0); } });
-async function loadData() { try { D = await api('getDashboardData'); if (D.corner !== undefined) setCorner(normCorner(D.corner)); render(); } catch (e) { toast(e.message); if (/login|password/i.test(e.message)) logout(); } }
+async function loadData() { try { D = await api('getDashboardData'); if (D.corner !== undefined) setCorner(normCorner(D.corner)); render(); jobAlert(); } catch (e) { toast(e.message); if (/login|password/i.test(e.message)) logout(); } }
 function logout() { sessionStorage.removeItem('ctl_u'); U = null; D = null; location.hash = ''; render(); }
 
 function loginView() {
@@ -136,7 +136,7 @@ function header(w = 'max-w-7xl', mode = '') {
   <img src="logo.png" alt="Hanwa" class="h-7 w-auto bg-white rounded px-2 py-0.5" onload="setOrn()" onerror="this.style.display='none';setOrn()"><h1 class="font-semibold text-base mr-auto" style="text-shadow:0 1px 3px rgba(6,24,80,.55)">${APP_NAME} <span class="hidden sm:inline font-normal text-sm opacity-80">· PT Hanwa Steel Service Indonesia</span></h1>
   <span class="text-sm">${esc(U.nama)} <span class="bd bg-[#e6f0fe] text-[#0f3a7d] ml-1">${esc(U.role)}</span></span>
   ${isA() ? '<button class="btn g" onclick="showCorner(true)">Quality Corner</button>' : ''}
-  ${U.role !== 'Guest' || mode === 'issue' ? `<button class="btn !bg-white !text-[#0f3a7d]" onclick="${mode === 'rt' ? 'routineForm()' : mode === 'issue' ? 'issueForm()' : 'recForm()'}">${mode === 'rt' ? '+ Input Harian' : mode === 'issue' ? '+ Laporkan Issue' : '+ Buat Baru'}</button>` : ''}
+  ${U.role !== 'Guest' || mode === 'issue' ? `<button class="btn !bg-white !text-[#0f3a7d]" onclick="${mode === 'rt' ? 'routineForm()' : mode === 'issue' ? 'issueForm()' : mode === 'job' ? 'jobForm()' : 'recForm()'}">${mode === 'rt' ? '+ Input Harian' : mode === 'issue' ? '+ Laporkan Issue' : mode === 'job' ? '+ Job Baru' : '+ Buat Baru'}</button>` : ''}
   ${isA() ? '<button class="btn g" onclick="adminPanel()">Pengaturan / Users</button>' : ''}
   <button class="btn g" onclick="logout()">Logout</button></div></header>`;
 }
@@ -150,6 +150,7 @@ function setTab(t) { TAB = t; sessionStorage.setItem('ctl_tab', t); F = emptyF()
 function dash() {
   if (TAB === RTAB) return routineView();
   if (TAB === ITAB) return issueView();
+  if (TAB === JTAB) return jobView();
   const R = D.records.filter(r => r.kategori === TAB), op = R.filter(r => !closed(r)), od = op.filter(r => sla(r).c === 'red').length;
   const cards = [['Total', R.length, ['#e8f0fb','#b3cdee','#1e4f8a']], ['OPEN', op.length, ['#fdf4df','#ecd08a','#8a5a00']], ['Terlambat', od, ['#fbeae8','#e9b4ae','#9b1c1c']], ['CLOSE', R.length - op.length, ['#d8eedf','#8ccaa0','#0b5d2a']]];
   const st = D.cats[TAB].steps;
@@ -181,7 +182,7 @@ function rows() {
 /* ---------- Tab bersama + Routine Job ---------- */
 function navTabs() {
   return `<nav class="flex gap-1 overflow-x-auto border-b border-slate-300" role="tablist">${(U.role === 'Guest' ? ALLTABS.filter(t => GUEST_TABS.includes(t[0])) : ALLTABS).map(t => {
-    const n = t[0] === RTAB ? rtCalc().total : t[0] === ITAB ? (D.issues || []).filter(i => i.status !== 'CLOSED').length : D.records.filter(r => r.kategori === t[0] && !closed(r)).length;
+    const n = t[0] === RTAB ? rtCalc().total : t[0] === ITAB ? (D.issues || []).filter(i => i.status !== 'CLOSED').length : t[0] === JTAB ? (D.jobs || []).filter(j => j.status !== 'DONE').length : D.records.filter(r => r.kategori === t[0] && !closed(r)).length;
     return `<button role="tab" aria-selected="${t[0] === TAB}" class="tab ${t[0] === TAB ? 'on' : ''}" onclick="setTab('${t[0]}')">${t[1]} <span class="bd ${n ? 'bg-amber-100 text-amber-800' : 'bg-slate-100 text-slate-500'} ml-1">${n}</span></button>`; }).join('')}</nav>`;
 }
 const dayAdd = (s, n) => { const d = new Date(s + 'T00:00:00'); d.setDate(d.getDate() + n); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); };
@@ -386,6 +387,112 @@ async function initCorner() { // tampil dulu dari cache (langsung), lalu disegar
   } catch (e) { /* pengumuman bersifat tambahan; abaikan bila gagal */ }
 }
 document.addEventListener('keydown', e => { if (e.key === 'Escape') closeCorner(); });
+
+/* ---------- Kontrol Job (request job yang dipantau PIC agar tidak terlupa) ---------- */
+const JST = {OPEN: 'Open', ON_PROGRESS: 'On Progress', PENDING: 'Pending', DONE: 'Selesai'};
+const JST_CLS = {OPEN: 'bg-blue-100 text-blue-800', ON_PROGRESS: 'bg-sky-100 text-sky-800', PENDING: 'bg-amber-100 text-amber-800', DONE: 'bg-emerald-100 text-emerald-800'};
+let JF = {q: '', pic: '', st: 'ACTIVE', mine: false};
+const daysDiff = (a, b) => Math.round((new Date(b) - new Date(a)) / 864e5);
+const jobBadge = j => `<span class="bd !px-2.5 !py-1 font-semibold ${JST_CLS[j.status] || ''}">${esc(JST[j.status] || j.status)}</span>`;
+const prioBd = p => `<span class="bd ${p === 'High' ? 'bg-red-100 text-red-700' : p === 'Low' ? 'bg-slate-100 text-slate-600' : 'bg-amber-100 text-amber-800'}">${esc(p)}</span>`;
+/* lv 2 = merah (terlambat / follow-up lewat / pending tanpa update), lv 1 = kuning (pending, tanpa update, follow-up hari ini) */
+function jobAttn(j) {
+  if (j.status === 'DONE') return {lv: 0, why: [], age: 0, late: false};
+  const td = todayStr(), why = []; let lv = 0;
+  const late = !!j.target_date && j.target_date < td, age = Math.max(0, daysDiff(String(j.last_updated).slice(0, 10), td));
+  if (late) { why.push('Terlambat ' + daysDiff(j.target_date, td) + ' hari'); lv = 2; }
+  if (j.status === 'PENDING' && j.follow_up) {
+    if (j.follow_up < td) { why.push('Follow-up lewat ' + daysDiff(j.follow_up, td) + ' hari'); lv = 2; }
+    else if (j.follow_up === td) { why.push('Follow-up hari ini'); lv = Math.max(lv, 1); }
+  }
+  if (age >= STALE_DAYS) { why.push('Tanpa update ' + age + ' hari'); lv = Math.max(lv, j.status === 'PENDING' ? 2 : 1); }
+  if (j.status === 'PENDING') lv = Math.max(lv, 1);
+  return {lv, why, age, late};
+}
+const attnChips = a => a.why.map(w => `<span class="bd ${a.lv === 2 ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-800'}">${esc(w)}</span>`).join(' ');
+function jobAlert() { // sekali per sesi login: ingatkan job milik user yang perlu perhatian
+  if (!U || U.role === 'Guest' || !D || !D.jobs || sessionStorage.getItem('ctl_jt')) return;
+  sessionStorage.setItem('ctl_jt', '1');
+  const n = D.jobs.filter(j => j.pic === U.nama && jobAttn(j).lv >= 1).length;
+  if (n) toast('Ada ' + n + ' job Anda yang perlu perhatian (pending, terlambat, atau lama tanpa update). Buka tab Kontrol Job.', 7000);
+}
+function jobTable() {
+  const q = JF.q.toLowerCase(), cmp = (a, b) => a < b ? -1 : a > b ? 1 : 0;
+  const L = D.jobs.map(j => ({j, a: jobAttn(j)})).filter(x => {
+    const j = x.j;
+    if (JF.st === 'ACTIVE' ? j.status === 'DONE' : (JF.st !== 'ALL' && j.status !== JF.st)) return false;
+    if (JF.pic && j.pic !== JF.pic) return false;
+    if (JF.mine && j.pic !== U.nama) return false;
+    return !q || [j.job_id, j.judul, j.requester, j.pic, j.deskripsi].join(' ').toLowerCase().includes(q);
+  }).sort((x, y) => y.a.lv - x.a.lv || cmp(x.j.target_date, y.j.target_date));
+  if (!L.length) return '<div class="p-8 text-center text-slate-500">Tidak ada job yang sesuai.</div>';
+  return `<div class="overflow-x-auto"><table class="w-full text-sm"><thead class="text-left text-slate-500 border-b"><tr>${['Job', 'PIC', 'Prioritas', 'Status', 'Target', 'Update terakhir', ''].map(h => `<th class="px-3 py-2 font-medium">${h}</th>`).join('')}</tr></thead><tbody>${L.map(({j, a}) =>
+    `<tr class="border-b last:border-0 align-top"><td class="px-3 py-1.5 max-w-md" style="border-left:4px solid ${a.lv === 2 ? '#dc2626' : a.lv === 1 ? '#f59e0b' : 'transparent'}"><div class="text-xs text-slate-500">${esc(j.job_id)} · ${dshort(j.tanggal)}</div>
+    <div class="font-medium">${esc(j.judul)}</div><div class="text-xs text-slate-500">Peminta: ${esc(j.requester)}</div>${a.why.length ? `<div class="flex flex-wrap gap-1 mt-1">${attnChips(a)}</div>` : ''}</td>
+    <td class="px-3 py-1.5 whitespace-nowrap">${esc(j.pic)}</td><td class="px-3 py-1.5">${prioBd(j.prioritas)}</td><td class="px-3 py-1.5">${jobBadge(j)}</td>
+    <td class="px-3 py-1.5 whitespace-nowrap ${a.late ? 'text-red-700 font-medium' : ''}">${dshort(j.target_date)}${j.status === 'PENDING' && j.follow_up ? `<div class="text-xs text-slate-500">Follow-up: ${dshort(j.follow_up)}</div>` : ''}</td>
+    <td class="px-3 py-1.5 whitespace-nowrap text-xs ${a.age >= STALE_DAYS && j.status !== 'DONE' ? 'text-red-700 font-medium' : 'text-slate-600'}">${j.status === 'DONE' ? 'Selesai ' + dshort(j.tgl_selesai) : a.age ? a.age + ' hari lalu' : 'hari ini'}</td>
+    <td class="px-3 py-1.5"><button class="btn g" onclick="jobDetail('${esc(j.job_id)}')">Detail</button></td></tr>`).join('')}</tbody></table></div>`;
+}
+function jobView() {
+  if (!D.jobs) { $('#app').innerHTML = header('max-w-7xl', 'job') + `<main class="max-w-7xl mx-auto px-4 py-2 space-y-2">${navTabs()}<div class="bg-white rounded-lg border p-6 text-center text-slate-600">Backend (Apps Script) belum diperbarui untuk Kontrol Job. Tempel Code.gs terbaru, lalu Deploy &gt; Manage deployments &gt; Edit &gt; New version.</div></main>` + footer(); return; }
+  const act = D.jobs.filter(j => j.status !== 'DONE'), A = act.map(jobAttn), mem = (D.members || []).map(m => m.nama);
+  const cards = [['Aktif', act.length, ['#e8f0fb', '#b3cdee', '#1e4f8a']], ['Pending', act.filter(j => j.status === 'PENDING').length, ['#fdf4df', '#ecd08a', '#8a5a00']], ['Terlambat', A.filter(a => a.late).length, ['#fbeae8', '#e9b4ae', '#9b1c1c']], ['Tanpa update ≥' + STALE_DAYS + ' hr', A.filter(a => a.age >= STALE_DAYS).length, ['#fbeae8', '#e9b4ae', '#9b1c1c']]];
+  const opt = (v, l, sel) => `<option value="${esc(v)}" ${sel ? 'selected' : ''}>${esc(l)}</option>`;
+  $('#app').innerHTML = header('max-w-7xl', 'job') + `<main class="max-w-7xl mx-auto px-4 py-2 space-y-2">${navTabs()}
+  <div class="grid grid-cols-2 sm:grid-cols-4 gap-1.5 sm:gap-2">${cards.map(x => `<div class="rounded-lg px-2 sm:px-3 py-1.5 border-l-4 flex items-baseline gap-1 sm:gap-2 min-w-0" style="background:${x[2][0]};border-color:${x[2][1]};color:${x[2][2]}"><span class="text-lg sm:text-xl font-semibold leading-none">${x[1]}</span><span class="text-[11px] sm:text-sm font-medium truncate">${x[0]}</span></div>`).join('')}</div>
+  <div class="flex flex-wrap items-center gap-2"><input id="jq" class="inp !w-auto flex-1 min-w-[12rem]" placeholder="Cari No., Job, Peminta, atau PIC" value="${esc(JF.q)}">
+  <select id="jp" class="inp !w-auto">${opt('', 'Semua PIC', !JF.pic)}${mem.map(n => opt(n, n, JF.pic === n)).join('')}</select>
+  <select id="js" class="inp !w-auto">${[['ACTIVE', 'Belum selesai'], ['ALL', 'Semua status'], ['PENDING', 'Pending'], ['ON_PROGRESS', 'On Progress'], ['OPEN', 'Open'], ['DONE', 'Selesai']].map(o => opt(o[0], o[1], JF.st === o[0])).join('')}</select>
+  <label class="text-sm flex items-center gap-1"><input id="jm" type="checkbox" ${JF.mine ? 'checked' : ''}> Job saya</label>
+  <button class="btn g" id="jr">Reset</button><button class="btn g" onclick="loadData()">Muat ulang</button></div>
+  <div class="bg-white rounded-lg border border-slate-200" id="jlist">${jobTable()}</div></main>` + footer();
+  const re = () => { $('#jlist').innerHTML = jobTable(); };
+  $('#jq').oninput = e => { JF.q = e.target.value; re(); }; $('#jp').onchange = e => { JF.pic = e.target.value; re(); };
+  $('#js').onchange = e => { JF.st = e.target.value; re(); }; $('#jm').onchange = e => { JF.mine = e.target.checked; re(); };
+  $('#jr').onclick = () => { JF = {q: '', pic: '', st: 'ACTIVE', mine: false}; jobView(); };
+}
+function jobForm() {
+  const mem = (D.members || []).map(m => m.nama);
+  openM(`<h2 class="text-lg font-semibold mb-3">Job Baru</h2><div class="space-y-2">
+  <input id="jj" class="inp" maxlength="150" placeholder="Judul job / request">
+  <textarea id="jd" class="inp" rows="4" maxlength="2000" placeholder="Detail request (apa yang diminta, data apa yang dibutuhkan)"></textarea>
+  <input id="jrq" class="inp" maxlength="80" placeholder="Peminta (mis. Sales A / Customer), kosong = ${esc(U.nama)}">
+  <div class="grid grid-cols-2 gap-2"><label class="text-xs text-slate-500">PIC yang mengontrol<select id="jpc" class="inp">${mem.map(n => `<option ${n === U.nama ? 'selected' : ''}>${esc(n)}</option>`).join('')}</select></label>
+  <label class="text-xs text-slate-500">Prioritas<select id="jpr" class="inp"><option>Low</option><option selected>Medium</option><option>High</option></select></label></div>
+  <label class="text-xs text-slate-500 block">Target selesai<input id="jtg" type="date" class="inp"></label>
+  <div class="flex gap-2 justify-end"><button class="btn g" onclick="closeM()">Batal</button><button class="btn" id="jsv">Simpan job</button></div></div>`);
+  $('#jsv').onclick = e => run(async () => {
+    const d = {judul: $('#jj').value.trim(), deskripsi: $('#jd').value.trim(), requester: $('#jrq').value.trim(), pic: $('#jpc').value, prioritas: $('#jpr').value, target_date: $('#jtg').value};
+    if (!d.judul) throw new Error('Judul job wajib diisi');
+    if (!d.target_date) throw new Error('Target selesai wajib diisi');
+    await api('createJob', d); closeM(); await loadData(); toast('Job disimpan');
+  }, e.target);
+}
+function jobDetail(id) {
+  const j = D.jobs.find(x => x.job_id === id); if (!j) return;
+  const a = jobAttn(j), T = (D.job_updates || []).filter(x => x.job_id === id).sort((x, y) => x.tanggal < y.tanggal ? -1 : x.tanggal > y.tanggal ? 1 : 0), can = isA() || U.role === 'QC' || U.nama === j.pic;
+  const mem = [...new Set([j.pic, ...(D.members || []).map(m => m.nama)])];
+  openM(`<div class="flex justify-between gap-2 mb-2"><div><div class="text-xs text-slate-500">${esc(j.job_id)} · dibuat ${dshort(j.tanggal)} oleh ${esc(j.dibuat_oleh)}</div><h2 class="text-lg font-semibold">${esc(j.judul)}</h2></div><div class="flex items-start gap-2">${jobBadge(j)}<button class="btn g" onclick="closeM()">Tutup</button></div></div>
+  ${a.why.length ? `<div class="flex flex-wrap gap-1 mb-2">${attnChips(a)}</div>` : ''}
+  <div class="grid grid-cols-2 gap-x-4 gap-y-1 text-sm mb-2"><div>PIC: <b>${esc(j.pic)}</b></div><div>Peminta: <b>${esc(j.requester)}</b></div><div>Prioritas: ${prioBd(j.prioritas)}</div><div>Target: <b>${dshort(j.target_date)}</b></div>${j.follow_up ? `<div>Follow-up: <b>${dshort(j.follow_up)}</b></div>` : ''}${j.status === 'DONE' ? `<div>Selesai: <b>${dshort(j.tgl_selesai)}</b></div>` : ''}</div>
+  ${j.deskripsi ? `<div class="rounded-md bg-slate-50 border p-3 whitespace-pre-wrap text-sm">${esc(j.deskripsi)}</div>` : ''}
+  <h3 class="font-semibold mt-4 mb-2">Riwayat</h3>
+  <ol class="space-y-2">${T.map(t => `<li class="rounded-md border-l-4 p-3" style="background:#f3f6fb;border-color:#9fb6d9"><div class="font-medium text-sm">${esc(t.aksi)}</div><div class="text-xs text-slate-600">${dshort(t.tanggal)} ${String(t.tanggal).slice(11, 16)} · ${esc(t.user_name)} (${esc(t.role)})</div>${t.catatan ? `<div class="mt-1 whitespace-pre-wrap text-sm">${esc(t.catatan)}</div>` : ''}</li>`).join('') || '<li class="text-slate-500 text-sm">Belum ada riwayat.</li>'}</ol>
+  ${can ? `<div class="mt-3 border-t pt-3 space-y-2"><div class="grid grid-cols-2 gap-2">
+  <label class="text-xs text-slate-500">Status<select id="jst" class="inp">${Object.keys(JST).map(k => `<option value="${k}" ${k === j.status ? 'selected' : ''}>${JST[k]}</option>`).join('')}</select></label>
+  <label class="text-xs text-slate-500">PIC<select id="jpic" class="inp">${mem.map(n => `<option ${n === j.pic ? 'selected' : ''}>${esc(n)}</option>`).join('')}</select></label>
+  <label class="text-xs text-slate-500">Target selesai<input id="jtd" type="date" class="inp" value="${esc(j.target_date)}"></label>
+  <label class="text-xs text-slate-500">Follow-up (cek lagi tanggal)<input id="jfu" type="date" class="inp" value="${esc(j.follow_up)}"></label></div>
+  <textarea id="jnt" class="inp" rows="3" maxlength="2000" placeholder="Catatan / progres. Wajib diisi bila status Pending atau target date diubah."></textarea>
+  <div class="flex gap-2 justify-end">${isA() ? `<button class="btn r mr-auto" onclick="delJob('${esc(id)}')">Hapus job</button>` : ''}<button class="btn" id="jsave">Simpan update</button></div></div>`
+  : `<p class="mt-3 text-xs text-slate-500">Hanya PIC (${esc(j.pic)}), QC, dan Admin yang dapat memperbarui job ini.</p>`}`);
+  if (can) $('#jsave').onclick = e => run(async () => {
+    await api('updateJob', {job_id: id, status: $('#jst').value, pic: $('#jpic').value, target_date: $('#jtd').value || j.target_date, follow_up: $('#jfu').value, notes: $('#jnt').value.trim()});
+    await loadData(); jobDetail(id); toast('Job diperbarui');
+  }, e.target);
+}
+function delJob(id) { if (confirm('Hapus job ' + id + ' beserta seluruh riwayatnya? Tindakan ini tidak bisa dibatalkan.')) run(async () => { await api('deleteJob', {job_id: id}); closeM(); await loadData(); toast('Job dihapus'); }); }
 
 /* ---------- Detail full halaman ---------- */
 function tlc(t, r) {
